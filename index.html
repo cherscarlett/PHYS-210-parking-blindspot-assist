@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prototype for Parking and Blindspot Assist</title>
+</head>
+<body>
+  <h1>Prototype for Parking and Blindspot Assist</h1>
+  <p><strong>Bluetooth status:</strong> <output id="connectionStatus" aria-live="polite">Checking local Python server…</output></p>
+  <p><strong>Source:</strong> <output id="source">None</output></p>
+
+  <h2>Connection</h2>
+  <p><label for="name">Device name:</label> <input id="name" value="BB JEEP"></p>
+  <p><label for="uuid">Notification UUID (optional):</label> <input id="uuid" size="38" placeholder="Leave empty to detect automatically"></p>
+  <p>
+    <button id="connect">Connect</button>
+    <button id="disconnect" disabled>Disconnect</button>
+    <button id="demo">Start simulated data</button>
+    <button id="stopDemo" disabled>Stop simulation</button>
+  </p>
+
+  <h2>Ultrasonic sensor readings</h2>
+  <table>
+    <thead><tr><th scope="col">Sensor</th><th scope="col">Distance</th><th scope="col">Status</th><th scope="col">Position</th></tr></thead>
+    <tbody>
+      <tr><th scope="row">Front</th><td id="front">—</td><td id="frontZone">No data</td><td>Faux bull bar</td></tr>
+      <tr><th scope="row">Left</th><td id="left">—</td><td id="leftZone">No data</td><td>Left rear-door window</td></tr>
+      <tr><th scope="row">Right</th><td id="right">—</td><td id="rightZone">No data</td><td>Right rear-door window</td></tr>
+      <tr><th scope="row">Rear</th><td id="rear">—</td><td id="rearZone">No data</td><td>Above spare tire</td></tr>
+    </tbody>
+  </table>
+  <p>Close: below 20 cm. Near: 20–39 cm. Clear: 40 cm or more. These are display thresholds, not vehicle controls.</p>
+
+  <h2>Additional telemetry</h2>
+  <p><strong>Motion:</strong> <output id="motion">Unknown</output></p>
+  <p><strong>Battery:</strong> <output id="battery">—</output></p>
+  <p><strong>Packets received:</strong> <output id="count">0</output></p>
+  <p><strong>Last reading:</strong> <output id="last">None</output></p>
+  <p><strong>Firmware data:</strong> <output id="firmware">Waiting</output></p>
+
+  <h2>Bluetooth characteristics</h2>
+  <pre id="characteristics">Not yet connected.</pre>
+
+  <h2>Event log</h2>
+  <p><a id="csv" href="/api/export.csv" download="bb-jeep-sensors.csv">Export recorded CSV</a></p>
+  <pre id="log">Waiting for Python server.</pre>
+
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const sensors = ['front','left','right','rear'];
+  let demoTimer = null;
+  let demoIndex = 0;
+  let serverReady = false;
+  let lastStatus = null;
+
+  function resetReadings() {
+    for (const sensor of sensors) {
+      $(sensor).textContent = '—';
+      $(sensor + 'Zone').textContent = 'No data';
+    }
+    $('motion').textContent = 'Unknown';
+    $('battery').textContent = '—';
+    $('count').textContent = '0';
+    $('last').textContent = 'None';
+    $('firmware').textContent = 'Waiting';
+  }
+  function reading(sensor, value) {
+    if (value === undefined || value === null) return;
+    const n = Number(value);
+    if (!Number.isFinite(n)) return;
+    if (n < 0) {
+      $(sensor).textContent = 'No echo';
+      $(sensor+'Zone').textContent = 'No reading';
+      return;
+    }
+    $(sensor).textContent = Number(n.toFixed(1)) + ' cm';
+    $(sensor+'Zone').textContent = n < 20 ? 'Close' : n < 40 ? 'Near' : 'Clear';
+  }
+  function showTelemetry(data, count, last) {
+    for (const sensor of sensors) reading(sensor, data[sensor]);
+    if (data.moving !== undefined && data.moving !== null) $('motion').textContent = data.moving ? 'Moving' : 'Stationary';
+    if (data.battery !== undefined && data.battery !== null) $('battery').textContent = Number(data.battery).toFixed(2) + ' V';
+    if (data.simulated !== undefined && data.simulated !== null) $('firmware').textContent = data.simulated ? 'Simulated readings' : 'Sensor readings';
+    $('count').textContent = String(count);
+    $('last').textContent = last || 'None';
+  }
+  async function api(path, payload) {
+    const response = await fetch(path, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload || {})
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || result.error || 'Request failed');
+    return result;
+  }
+  function stopDemo() {
+    if (demoTimer !== null) clearInterval(demoTimer);
+    demoTimer = null;
+    $('stopDemo').disabled = true;
+    $('demo').disabled = !serverReady || !!(lastStatus && lastStatus.wanted);
+    resetReadings();
+    $('source').textContent = 'None';
+    if (lastStatus) $('connectionStatus').textContent = lastStatus.status;
+  }
+  async function connect() {
+    if (demoTimer !== null) stopDemo();
+    resetReadings();
+    $('connect').disabled = true;
+    try {
+      await api('/api/connect', {name:$('name').value.trim() || 'BB JEEP', uuid:$('uuid').value.trim()});
+    } catch (err) {
+      $('connectionStatus').textContent = err.message;
+    }
+    await refresh();
+  }
+  async function disconnect() {
+    try { await api('/api/disconnect'); }
+    catch (err) { $('connectionStatus').textContent = err.message; }
+    await refresh();
+  }
+  function startDemo() {
+    if (demoTimer !== null || !serverReady || (lastStatus && lastStatus.wanted)) return;
+    demoIndex = 0;
+    $('source').textContent = 'Simulation only — no Arduino connection';
+    $('connectionStatus').textContent = 'Simulated data';
+    $('demo').disabled = true;
+    $('stopDemo').disabled = false;
+    $('connect').disabled = true;
+    function emit() {
+      const t = demoIndex++;
+      showTelemetry({
+        front:Math.round(61 + 38*Math.sin(t/5)),
+        left:Math.round(48 + 24*Math.sin(t/3)),
+        right:Math.round(52 + 20*Math.cos(t/4)),
+        rear:Math.round(77 - 17*Math.sin(t/6)),
+        moving:t%18 < 11, battery:7.55, simulated:true
+      }, t+1, new Date().toLocaleTimeString());
+    }
+    emit();
+    demoTimer = setInterval(emit, 900);
+  }
+  async function refresh() {
+    try {
+      const response = await fetch('/api/status', {cache:'no-store'});
+      if (!response.ok) throw new Error('Python server is unavailable');
+      const data = await response.json();
+      serverReady = true;
+      lastStatus = data;
+      $('log').textContent = data.logs.map(entry => `[${entry.time}] ${entry.message}`).join('\n') || 'No events.';
+      $('characteristics').textContent = data.characteristics.length
+        ? data.characteristics.map(c => `${c.uuid} [${c.properties.join(', ')}]`).join('\n')
+        : 'No GATT characteristics discovered yet.';
+      if (demoTimer === null) {
+        $('source').textContent = data.connected ? 'Live BLE (Python)' : 'No live data';
+        $('connectionStatus').textContent = data.status;
+        if (data.packets) showTelemetry(data.latest, data.packets, data.last_at);
+      }
+      $('connect').disabled = !!data.wanted || demoTimer !== null;
+      $('disconnect').disabled = !data.wanted;
+      $('demo').disabled = !!data.wanted || demoTimer !== null;
+    } catch (err) {
+      serverReady = false;
+      if (demoTimer === null) $('connectionStatus').textContent = 'Python server not running';
+      $('connect').disabled = true;
+      $('disconnect').disabled = true;
+      $('demo').disabled = true;
+    }
+  }
+  $('connect').addEventListener('click', connect);
+  $('disconnect').addEventListener('click', disconnect);
+  $('demo').addEventListener('click', startDemo);
+  $('stopDemo').addEventListener('click', stopDemo);
+  refresh();
+  setInterval(refresh, 900);
+})();
+</script>
+</body>
+</html>
