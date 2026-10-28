@@ -1,180 +1,833 @@
+
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Prototype for Parking and Blindspot Assist</title>
+  <title>Parking and Blindspot Assist</title>
+
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+
+    body {
+      background: #000;
+      color: #fff;
+      font-family: sans-serif;
+      margin: 16px;
+    }
+
+    button {
+      background: #181818;
+      color: #fff;
+      border: 1px solid #666;
+      border-radius: 4px;
+      padding: 5px 12px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #303030;
+    }
+
+    .blindspot-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 12px 0;
+    }
+
+    .blindspot-light {
+      position: relative;
+      flex: none;
+      display: inline-grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      font-size: 28px;
+      line-height: 1;
+    }
+
+    .blindspot-light .light-off,
+    .blindspot-light .light-on {
+      position: absolute;
+      transition:
+        opacity 0.4s ease,
+        filter 0.4s ease;
+    }
+
+    .blindspot-light .light-off {
+      opacity: 1;
+    }
+
+    .blindspot-light .light-on {
+      opacity: 0;
+      filter: brightness(0.5);
+    }
+
+    .blindspot-light.on .light-off {
+      opacity: 0;
+    }
+
+    .blindspot-light.on .light-on {
+      opacity: 1;
+      filter:
+        brightness(1)
+        drop-shadow(0 0 6px orange)
+        drop-shadow(0 0 12px rgba(255, 140, 0, 0.8));
+    }
+
+    .blindspot-text strong {
+      display: block;
+    }
+
+    .gear-control {
+      display: flex;
+      align-items: stretch;
+      gap: 12px;
+      height: 140px;
+    }
+
+    #gear-slider {
+      writing-mode: vertical-lr;
+      direction: ltr;
+      height: 100%;
+      width: 20px;
+      margin: 0;
+      accent-color: #fff;
+    }
+
+    .gear-labels {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .gear-label {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 24px;
+      font-size: x-large;
+    }
+
+    .gear-label-text {
+      color: #ccc;
+      font-weight: 400;
+      text-shadow: none;
+      transition:
+        color 0.4s ease,
+        text-shadow 0.4s ease;
+    }
+
+    .gear-label.selected .gear-label-text {
+      color: #fff;
+      font-weight: 700;
+      text-shadow:
+        0 0 5px rgba(255, 255, 255, 0.8),
+        0 0 12px rgba(255, 255, 255, 0.5);
+    }
+
+    .gear-light {
+      position: relative;
+      display: inline-grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      font-size: 21px;
+      line-height: 1;
+      flex: none;
+    }
+
+    .gear-light .light-off,
+    .gear-light .light-on {
+      position: absolute;
+      transition:
+        opacity 0.4s ease,
+        filter 0.4s ease;
+    }
+
+    .gear-light .light-off {
+      opacity: 1;
+      filter: drop-shadow(0 0 1px rgba(255,255,255,0.3));
+    }
+
+    .gear-light .light-on {
+      opacity: 0;
+      filter: brightness(0.5);
+    }
+
+    .gear-label.selected .gear-light .light-off {
+      opacity: 0;
+    }
+
+    .gear-label.selected .gear-light .light-on {
+      opacity: 1;
+      filter:
+        brightness(1)
+        drop-shadow(0 0 5px rgba(255, 255, 255, 0.9))
+        drop-shadow(0 0 11px rgba(255, 255, 255, 0.6));
+    }
+
+    .distance-light {
+      position: relative;
+      display: inline-grid;
+      place-items: center;
+      vertical-align: middle;
+      width: 28px;
+      height: 28px;
+      margin-right: 6px;
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    .distance-light .light-off,
+    .distance-light .light-near,
+    .distance-light .light-danger {
+      position: absolute;
+      transition: opacity 0.4s ease, filter 0.4s ease;
+    }
+
+    .distance-light .light-off {
+      opacity: 1;
+      filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.35));
+    }
+
+    .distance-light .light-near,
+    .distance-light .light-danger {
+      opacity: 0;
+    }
+
+    .distance-light.near .light-off,
+    .distance-light.solid .light-off {
+      opacity: 0;
+    }
+
+    .distance-light.near .light-near {
+      opacity: 1;
+      filter:
+        drop-shadow(0 0 6px orange)
+        drop-shadow(0 0 12px rgba(255, 140, 0, 0.8));
+    }
+
+    .distance-light.danger .light-danger {
+      filter:
+        drop-shadow(0 0 6px red)
+        drop-shadow(0 0 12px rgba(255, 0, 0, 0.8));
+      animation: dangerFlash var(--flash-period, 1000ms) ease-in-out infinite;
+    }
+
+    .distance-light.solid .light-danger {
+      opacity: 1;
+      filter:
+        drop-shadow(0 0 6px red)
+        drop-shadow(0 0 12px rgba(255, 0, 0, 0.8));
+    }
+
+    @keyframes dangerFlash {
+      0%, 100% { opacity: 0; }
+      50% { opacity: 1; }
+    }
+
+    /* Two-column dashboard layout */
+    .dashboard-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 20px;
+      align-items: stretch;
+      min-height: calc(100vh - 32px);
+    }
+
+    .dashboard-info {
+      border: 1px solid #999;
+      border-radius: 4px;
+      padding: 16px;
+    }
+
+    .dashboard-visual {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 0;
+    }
+
+    .parking-layout {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0;
+      width: min(85%, 340px);
+    }
+
+    .parking-zone {
+      position: relative;
+      box-sizing: border-box;
+      border: none;
+      background: #111;
+      border-radius: 4px;
+      width: 65%;
+      aspect-ratio: 1 / 1;
+      --p: 27%;
+      clip-path: polygon(var(--p) 100%, calc(100% - var(--p)) 100%, 100% 0, 0 0);
+    }
+
+    .parking-zone.front {
+      clip-path: polygon(var(--p) 100%, calc(100% - var(--p)) 100%, 100% 0, 0 0);
+    }
+
+    .parking-zone.rear {
+      clip-path: polygon(var(--p) 0, calc(100% - var(--p)) 0, 100% 100%, 0 100%);
+    }
+
+    .parking-zone .zone-fill {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 0;
+      background: #329c5a;
+      transition:
+        height 0.4s ease,
+        background-color 0.4s ease;
+    }
+
+    .parking-zone.front .zone-fill {
+      top: 0;
+      bottom: auto;
+    }
+
+    .parking-zone.rear .zone-fill {
+      bottom: 0;
+      top: auto;
+    }
+
+    .parking-layout svg {
+      display: block;
+      width: 78%;
+      height: auto;
+      overflow: visible;
+    }
+
+    .side-object {
+      fill: #f4a13b;
+      opacity: 0;
+      pointer-events: none;
+      transition: cx 0.4s ease, opacity 0.4s ease, filter 0.4s ease;
+    }
+
+    .side-object.detected {
+      opacity: 1;
+      filter: drop-shadow(0 0 2px orange)
+              drop-shadow(0 0 5px rgba(255, 165, 0, 0.8));
+    }
+
+    @media (max-width: 700px) {
+      .dashboard-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .dashboard-visual {
+        padding: 16px 0;
+      }
+    }
+  </style>
 </head>
+
 <body>
-  <h1>Prototype for Parking and Blindspot Assist</h1>
-  <p><strong>Bluetooth status:</strong> <output id="connectionStatus" aria-live="polite">Checking local Python server…</output></p>
-  <p><strong>Source:</strong> <output id="source">None</output></p>
+<div class="dashboard-layout">
+  <div class="dashboard-info">
+    <p id="status">Disconnected</p>
 
-  <h2>Connection</h2>
-  <p><label for="name">Device name:</label> <input id="name" value="BB JEEP"></p>
-  <p><label for="uuid">Notification UUID (optional):</label> <input id="uuid" size="38" placeholder="Leave empty to detect automatically"></p>
-  <p>
     <button id="connect">Connect</button>
-    <button id="disconnect" disabled>Disconnect</button>
-    <button id="demo">Start simulated data</button>
-    <button id="stopDemo" disabled>Stop simulation</button>
-  </p>
+    <button id="disconnect">Disconnect</button>
+    <button id="demo">Start Demo</button>
 
-  <h2>Ultrasonic sensor readings</h2>
-  <table>
-    <thead><tr><th scope="col">Sensor</th><th scope="col">Distance</th><th scope="col">Status</th><th scope="col">Position</th></tr></thead>
-    <tbody>
-      <tr><th scope="row">Front</th><td id="front">—</td><td id="frontZone">No data</td><td>Faux bull bar</td></tr>
-      <tr><th scope="row">Left</th><td id="left">—</td><td id="leftZone">No data</td><td>Left rear-door window</td></tr>
-      <tr><th scope="row">Right</th><td id="right">—</td><td id="rightZone">No data</td><td>Right rear-door window</td></tr>
-      <tr><th scope="row">Rear</th><td id="rear">—</td><td id="rearZone">No data</td><td>Above spare tire</td></tr>
-    </tbody>
-  </table>
-  <p>Close: below 20 cm. Near: 20–39 cm. Clear: 40 cm or more. These are display thresholds, not vehicle controls.</p>
+    <h2>Blind spot assistance</h2>
 
-  <h2>Additional telemetry</h2>
-  <p><strong>Motion:</strong> <output id="motion">Unknown</output></p>
-  <p><strong>Battery:</strong> <output id="battery">—</output></p>
-  <p><strong>Packets received:</strong> <output id="count">0</output></p>
-  <p><strong>Last reading:</strong> <output id="last">None</output></p>
-  <p><strong>Firmware data:</strong> <output id="firmware">Waiting</output></p>
+    <div class="blindspot-row">
+      <span id="left-light" class="blindspot-light" aria-hidden="true">
+        <span class="light-off">⚫</span>
+        <span class="light-on">🟠</span>
+      </span>
 
-  <h2>Bluetooth characteristics</h2>
-  <pre id="characteristics">Not yet connected.</pre>
+      <div class="blindspot-text">
+        <span>Driver</span>
+        <span id="distance-driver"></span>
+      </div>
+    </div>
 
-  <h2>Event log</h2>
-  <p><a id="csv" href="/api/export.csv" download="bb-jeep-sensors.csv">Export recorded CSV</a></p>
-  <pre id="log">Waiting for Python server.</pre>
+    <div class="blindspot-row">
+      <span id="right-light" class="blindspot-light" aria-hidden="true">
+        <span class="light-off">⚫</span>
+        <span class="light-on">🟠</span>
+      </span>
+
+      <div class="blindspot-text">
+        <span>Passenger</span>
+        <span id="distance-passenger"></span>
+      </div>
+    </div>
+
+    <h2>Parking assistance</h2>
+
+    <div id="driving-distance">
+      <span id="distance-light" class="distance-light" aria-hidden="true" hidden>
+        <span class="light-off">⚫</span>
+        <span class="light-near">🟠</span>
+        <span class="light-danger">🔴</span>
+      </span>
+      <span id="distance-message"></span>
+    </div>
+
+    <h2>Gear</h2>
+
+    <div class="gear-control">
+      <input
+        id="gear-slider"
+        type="range"
+        min="0"
+        max="2"
+        step="1"
+        value="0"
+        disabled
+        aria-label="Current gear"
+        aria-valuetext="Waiting for data"
+      >
+
+      <div class="gear-labels">
+        <div id="gear-park" class="gear-label">
+          <span class="gear-light" aria-hidden="true">
+            <span class="light-off">⚫</span>
+            <span class="light-on">⚪</span>
+          </span>
+          <span class="gear-label-text">P</span>
+        </div>
+
+        <div id="gear-drive" class="gear-label">
+          <span class="gear-light" aria-hidden="true">
+            <span class="light-off">⚫</span>
+            <span class="light-on">⚪</span>
+          </span>
+          <span class="gear-label-text">D</span>
+        </div>
+
+        <div id="gear-reverse" class="gear-label">
+          <span class="gear-light" aria-hidden="true">
+            <span class="light-off">⚫</span>
+            <span class="light-on">⚪</span>
+          </span>
+          <span class="gear-label-text">R</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="dashboard-visual">
+    <div class="parking-layout">
+
+      <!-- Front detection area -->
+      <div class="parking-zone front">
+        <div id="front-fill" class="zone-fill"></div>
+      </div>
+
+      <!-- Jeep -->
+      <svg width="72" height="108" viewBox="0 8 72 108"
+           xmlns="http://www.w3.org/2000/svg"
+           aria-label="Top-down Jeep">
+
+        <!-- Body -->
+        <rect x="16" y="8" width="40" height="108" rx="10"
+              fill="white" stroke="black" stroke-width="2"/>
+
+        <!-- Top -->
+        <rect x="20" y="12" width="32" height="38" rx="6"
+              fill="#222"/>
+        <path d="M18 46 Q36 38 54 46 L50 60 L22 60 Z"
+              fill="black"/>
+
+        <!-- Hood -->
+        <rect x="21" y="60" width="30" height="38" rx="4"
+              fill="#555" stroke="#222" stroke-width="1.5"/>
+        <rect x="27" y="65" width="3" height="28" fill="#333"/>
+        <rect x="34" y="64" width="3" height="30" fill="#333"/>
+        <rect x="41" y="65" width="3" height="28" fill="#333"/>
+
+        <!-- Cargo area -->
+        <path d="M22 98 L50 98 L54 108 L18 108 Z"
+              fill="#444"/>
+
+        <!-- Side windows -->
+        <path d="M18 60 L24 60 L24 82 L18 88 Z" fill="#111"/>
+        <path d="M54 60 L48 60 L48 82 L54 88 Z" fill="#111"/>
+        <path d="M18 88 L24 82 L24 100 L18 104 Z" fill="#111"/>
+        <path d="M54 88 L48 82 L48 100 L54 104 Z" fill="#111"/>
+
+        <!-- Wheels -->
+        <rect x="10" y="22" width="6" height="22" rx="3" fill="#333"/>
+        <rect x="56" y="22" width="6" height="22" rx="3" fill="#333"/>
+        <rect x="10" y="78" width="6" height="22" rx="3" fill="#333"/>
+        <rect x="56" y="78" width="6" height="22" rx="3" fill="#333"/>
+
+        <!-- Head lights -->
+        <rect x="18" y="8" width="8" height="3" rx="1.5"
+              fill="#c9b998"/>
+        <rect x="46" y="8" width="8" height="3" rx="1.5"
+              fill="#c9b998"/>
+
+        <!-- Brake lights -->
+        <rect x="18" y="113" width="8" height="3" rx="1.5"
+              fill="#bf3b38"/>
+        <rect x="46" y="113" width="8" height="3" rx="1.5"
+              fill="#bf3b38"/>
+
+        <!-- Objects beside driver and passenger windows -->
+        <circle id="driver-object" class="side-object" cx="0" cy="70" r="3"/>
+        <circle id="passenger-object" class="side-object" cx="72" cy="70" r="3"/>
+
+      </svg>
+
+      <!-- Rear detection area -->
+      <div class="parking-zone rear">
+        <div id="rear-fill" class="zone-fill"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
 
 <script>
-(() => {
-  'use strict';
-  const $ = id => document.getElementById(id);
-  const sensors = ['front','left','right','rear'];
-  let demoTimer = null;
-  let demoIndex = 0;
-  let serverReady = false;
-  let lastStatus = null;
+  const byId = id => document.getElementById(id);
 
-  function resetReadings() {
-    for (const sensor of sensors) {
-      $(sensor).textContent = '—';
-      $(sensor + 'Zone').textContent = 'No data';
+  const blindSpotLimit = 10;
+  const drivingLimit = 30;
+  const dangerThreshold = 7;
+
+  const amberThreshold = Math.round(
+    drivingLimit - (drivingLimit - dangerThreshold) * 2 / 3
+  );
+
+  const gearPositions = {
+    Park: 0,
+    Drive: 1,
+    Reverse: 2
+  };
+
+  // Times in milliseconds
+  const demoPhases = [
+    { gear: 'Drive', duration: 5000 },
+    { gear: 'Reverse', duration: 5000 },
+    { gear: 'Park', side: 'Driver', duration: 5000 },
+    { gear: 'Park', side: 'Passenger', duration: 5000 },
+    { gear: 'Park', duration: 8000 }
+  ];
+
+  const demoCycleDuration = demoPhases.reduce(
+    (total, phase) => total + phase.duration,
+    0
+  );
+
+  let demoActive = false;
+  let demoStartTime = 0;
+
+  async function request(path, method = 'GET') {
+    const result = await fetch(path, { method });
+    const value = await result.json();
+
+    if (!result.ok) {
+      throw new Error(
+        value.error || value.message || result.statusText
+      );
     }
-    $('motion').textContent = 'Unknown';
-    $('battery').textContent = '—';
-    $('count').textContent = '0';
-    $('last').textContent = 'None';
-    $('firmware').textContent = 'Waiting';
+
+    return value;
   }
-  function reading(sensor, value) {
-    if (value === undefined || value === null) return;
-    const n = Number(value);
-    if (!Number.isFinite(n)) return;
-    if (n < 0) {
-      $(sensor).textContent = 'No echo';
-      $(sensor+'Zone').textContent = 'No reading';
+
+  function stopDemo() {
+    demoActive = false;
+    byId('demo').textContent = 'Start Demo';
+  }
+
+  byId('connect').onclick = () => {
+    stopDemo();
+
+    request('/api/connect', 'POST')
+      .catch(e => byId('status').textContent = e.message);
+  };
+
+  byId('disconnect').onclick = () => {
+    stopDemo();
+
+    request('/api/disconnect', 'POST')
+      .catch(e => byId('status').textContent = e.message);
+  };
+
+  byId('demo').onclick = () => {
+    if (demoActive) {
+      stopDemo();
+      update();
+    } else {
+      demoActive = true;
+      demoStartTime = Date.now();
+      byId('demo').textContent = 'Stop Demo';
+      update();
+    }
+  };
+
+  // Generate demo
+  function generateDemoState() {
+    let elapsed =
+      (Date.now() - demoStartTime) % demoCycleDuration;
+
+    let phase = demoPhases[0];
+
+    for (const candidate of demoPhases) {
+      if (elapsed < candidate.duration) {
+        phase = candidate;
+        break;
+      }
+
+      elapsed -= candidate.duration;
+    }
+
+    const progress = elapsed / phase.duration;
+
+    const approachingDistance = progress < 0.25
+      ? Math.round(28 - 20 * (progress / 0.25))
+      : Math.round(
+          8 - 6 * Math.min(1, (progress - 0.25) / 0.6)
+        );
+
+    const sideDistance =
+      1 + 9 * (1 + Math.cos(2 * Math.PI * progress)) / 2;
+
+    const latest = {
+      left: 60,
+      right: 60,
+      front: 60,
+      rear: 60
+    };
+
+    if (phase.gear === 'Drive') {
+
+      latest.front = approachingDistance;
+
+    } else if (phase.gear === 'Reverse') {
+
+      latest.rear = approachingDistance;
+
+    } else if (phase.side === 'Driver') {
+
+      latest.left = sideDistance;
+
+    } else if (phase.side === 'Passenger') {
+
+      latest.right = sideDistance;
+    }
+
+    return {
+      connected: true,
+      status: 'Demo',
+      direction: phase.gear,
+      latest: latest
+    };
+  }
+
+  function showMessages(container, messages, emptyMessage) {
+    container.replaceChildren();
+
+    if (!messages.length) {
+      container.textContent = emptyMessage;
       return;
     }
-    $(sensor).textContent = Number(n.toFixed(1)) + ' cm';
-    $(sensor+'Zone').textContent = n < 20 ? 'Close' : n < 40 ? 'Near' : 'Clear';
-  }
-  function showTelemetry(data, count, last) {
-    for (const sensor of sensors) reading(sensor, data[sensor]);
-    if (data.moving !== undefined && data.moving !== null) $('motion').textContent = data.moving ? 'Moving' : 'Stationary';
-    if (data.battery !== undefined && data.battery !== null) $('battery').textContent = Number(data.battery).toFixed(2) + ' V';
-    if (data.simulated !== undefined && data.simulated !== null) $('firmware').textContent = data.simulated ? 'Simulated readings' : 'Sensor readings';
-    $('count').textContent = String(count);
-    $('last').textContent = last || 'None';
-  }
-  async function api(path, payload) {
-    const response = await fetch(path, {
-      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload || {})
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || result.error || 'Request failed');
-    return result;
-  }
-  function stopDemo() {
-    if (demoTimer !== null) clearInterval(demoTimer);
-    demoTimer = null;
-    $('stopDemo').disabled = true;
-    $('demo').disabled = !serverReady || !!(lastStatus && lastStatus.wanted);
-    resetReadings();
-    $('source').textContent = 'None';
-    if (lastStatus) $('connectionStatus').textContent = lastStatus.status;
-  }
-  async function connect() {
-    if (demoTimer !== null) stopDemo();
-    resetReadings();
-    $('connect').disabled = true;
-    try {
-      await api('/api/connect', {name:$('name').value.trim() || 'BB JEEP', uuid:$('uuid').value.trim()});
-    } catch (err) {
-      $('connectionStatus').textContent = err.message;
+
+    for (const message of messages) {
+      const row = document.createElement('p');
+      row.textContent = message;
+      container.append(row);
     }
-    await refresh();
   }
-  async function disconnect() {
-    try { await api('/api/disconnect'); }
-    catch (err) { $('connectionStatus').textContent = err.message; }
-    await refresh();
+
+  function updateParkingZone(id, distance, connected) {
+    const fill = byId(id);
+
+    const valid =
+      connected &&
+      typeof distance === 'number' &&
+      distance > 0 &&
+      distance <= drivingLimit;
+
+    const percent = valid
+      ? Math.max(0, Math.min(100,
+          (drivingLimit - distance) / (drivingLimit - 2) * 100))
+      : 0;
+
+    fill.style.height = percent + '%';
+
+    fill.style.backgroundColor =
+      !valid || distance > amberThreshold
+        ? '#329c5a'                 // Green
+        : distance > dangerThreshold
+          ? '#d69a35'               // Amber
+          : '#d64242';              // Red
   }
-  function startDemo() {
-    if (demoTimer !== null || !serverReady || (lastStatus && lastStatus.wanted)) return;
-    demoIndex = 0;
-    $('source').textContent = 'Simulation only — no Arduino connection';
-    $('connectionStatus').textContent = 'Simulated data';
-    $('demo').disabled = true;
-    $('stopDemo').disabled = false;
-    $('connect').disabled = true;
-    function emit() {
-      const t = demoIndex++;
-      showTelemetry({
-        front:Math.round(61 + 38*Math.sin(t/5)),
-        left:Math.round(48 + 24*Math.sin(t/3)),
-        right:Math.round(52 + 20*Math.cos(t/4)),
-        rear:Math.round(77 - 17*Math.sin(t/6)),
-        moving:t%18 < 11, battery:7.55, simulated:true
-      }, t+1, new Date().toLocaleTimeString());
+
+  function render(state) {
+    byId('status').textContent = state.status;
+
+    const currentGear =
+      state.connected &&
+      Object.prototype.hasOwnProperty.call(
+        gearPositions,
+        state.direction
+      )
+        ? state.direction
+        : null;
+
+    byId('gear-slider').value =
+      currentGear === null
+        ? 0
+        : gearPositions[currentGear];
+
+    byId('gear-slider').setAttribute(
+      'aria-valuetext',
+      currentGear ?? 'Waiting for data'
+    );
+
+    for (const gear of ['Park', 'Drive', 'Reverse']) {
+      byId('gear-' + gear.toLowerCase())
+        .classList.toggle('selected', gear === currentGear);
     }
-    emit();
-    demoTimer = setInterval(emit, 900);
-  }
-  async function refresh() {
-    try {
-      const response = await fetch('/api/status', {cache:'no-store'});
-      if (!response.ok) throw new Error('Python server is unavailable');
-      const data = await response.json();
-      serverReady = true;
-      lastStatus = data;
-      $('log').textContent = data.logs.map(entry => `[${entry.time}] ${entry.message}`).join('\n') || 'No events.';
-      $('characteristics').textContent = data.characteristics.length
-        ? data.characteristics.map(c => `${c.uuid} [${c.properties.join(', ')}]`).join('\n')
-        : 'No GATT characteristics discovered yet.';
-      if (demoTimer === null) {
-        $('source').textContent = data.connected ? 'Live BLE (Python)' : 'No live data';
-        $('connectionStatus').textContent = data.status;
-        if (data.packets) showTelemetry(data.latest, data.packets, data.last_at);
+
+    const latest = state.latest || {};
+
+    // Front and rear zones use their own sensor distances.
+    updateParkingZone('front-fill', latest.front, state.connected);
+    updateParkingZone('rear-fill', latest.rear, state.connected);
+
+    const inRange = (distance, limit) =>
+      typeof distance === 'number' &&
+      distance > 0 &&
+      distance <= limit;
+
+    const leftActive =
+      state.connected &&
+      inRange(latest.left, blindSpotLimit);
+
+    const rightActive =
+      state.connected &&
+      inRange(latest.right, blindSpotLimit);
+
+    byId('left-light').classList.toggle('on', leftActive);
+    byId('right-light').classList.toggle('on', rightActive);
+    byId('distance-driver').textContent =
+      leftActive ? `${Number(latest.left.toFixed(1))} cm` : '';
+
+    byId('distance-passenger').textContent =
+      rightActive ? `${Number(latest.right.toFixed(1))} cm` : '';
+
+    const driverObject = byId('driver-object');
+    const passengerObject = byId('passenger-object');
+
+    driverObject.classList.toggle('detected', leftActive);
+    passengerObject.classList.toggle('detected', rightActive);
+
+    if (leftActive) {
+      driverObject.setAttribute('cx', 10 - latest.left * 2);
+    }
+    if (rightActive) {
+      passengerObject.setAttribute('cx', 62 + latest.right * 2);
+    }
+
+    const drivingDistances = [];
+
+    if (state.connected) {
+      if (
+        currentGear === 'Drive' &&
+        inRange(latest.front, drivingLimit)
+      ) {
+        drivingDistances.push(
+          `Front: ${latest.front} cm`
+        );
+
+      } else if (
+        currentGear === 'Reverse' &&
+        inRange(latest.rear, drivingLimit)
+      ) {
+        drivingDistances.push(
+          `Rear: ${latest.rear} cm`
+        );
       }
-      $('connect').disabled = !!data.wanted || demoTimer !== null;
-      $('disconnect').disabled = !data.wanted;
-      $('demo').disabled = !!data.wanted || demoTimer !== null;
-    } catch (err) {
-      serverReady = false;
-      if (demoTimer === null) $('connectionStatus').textContent = 'Python server not running';
-      $('connect').disabled = true;
-      $('disconnect').disabled = true;
-      $('demo').disabled = true;
+    }
+
+    byId('distance-message').textContent = drivingDistances.length
+      ? drivingDistances[0]
+      : !state.connected
+        ? 'Idling...'
+        : currentGear === 'Park'
+          ? 'Idling...'
+          : 'Clear';
+
+    const distance = currentGear === 'Drive'
+      ? latest.front
+      : currentGear === 'Reverse'
+        ? latest.rear
+        : null;
+
+    const close = state.connected && inRange(distance, drivingLimit);
+    const light = byId('distance-light');
+
+    light.hidden = !state.connected || currentGear === 'Park';
+
+    light.classList.toggle(
+      'near',
+      close && distance > dangerThreshold
+    );
+
+    light.classList.toggle(
+      'danger',
+      close && distance > 2 && distance <= dangerThreshold
+    );
+
+    light.classList.toggle(
+      'solid',
+      close && distance <= 2
+    );
+
+    if (close && distance > 2 && distance <= dangerThreshold) {
+      light.style.setProperty(
+        '--flash-period',
+        Math.max(
+          250,
+          1000 - (dangerThreshold - distance) * 190
+        ) + 'ms'
+      );
     }
   }
-  $('connect').addEventListener('click', connect);
-  $('disconnect').addEventListener('click', disconnect);
-  $('demo').addEventListener('click', startDemo);
-  $('stopDemo').addEventListener('click', stopDemo);
-  refresh();
-  setInterval(refresh, 900);
-})();
+
+  async function update() {
+    if (demoActive) {
+      render(generateDemoState());
+      return;
+    }
+
+    try {
+      const state = await request('/api/status');
+
+      if (demoActive) return;
+
+      render(state);
+
+    } catch (error) {
+      if (!demoActive) {
+        byId('status').textContent =
+          'Server error: ' + error.message;
+      }
+    }
+  }
+
+  update();
+  setInterval(update, 400);
 </script>
+
 </body>
 </html>
