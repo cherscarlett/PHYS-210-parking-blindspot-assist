@@ -89,6 +89,31 @@
       height: 140px;
     }
 
+    .speed-display {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin: 0 0 4px;
+    }
+
+    #speed-value {
+      font-size: 42px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.15;
+    }
+
+    .speed-unit {
+      color: #ccc;
+      font-size: 20px;
+    }
+
+    .speed-note {
+      color: #aaa;
+      font-size: 13px;
+      margin-top: 0;
+    }
+
     #gear-slider {
       writing-mode: vertical-lr;
       direction: ltr;
@@ -250,6 +275,8 @@
       align-items: center;
       justify-content: center;
       min-width: 0;
+      height: calc(95vh - 34px);
+      overflow: visible;
     }
 
     .parking-layout {
@@ -379,6 +406,13 @@
       <span id="distance-message"></span>
     </div>
 
+    <h2>Speed</h2>
+    <div class="speed-display" role="status" aria-live="off">
+      <span id="speed-value">--</span>
+      <span class="speed-unit">cm/s</span>
+    </div>
+    <p class="speed-note">Estimated from accelerometer</p>
+
     <h2>Gear</h2>
 
     <div class="gear-control">
@@ -439,13 +473,14 @@
         <rect x="16" y="8" width="40" height="108" rx="10"
               fill="white" stroke="black" stroke-width="2"/>
 
-        <!-- Top -->
+        <!-- Hood -->
         <rect x="20" y="12" width="32" height="38" rx="6"
-              fill="#222"/>
+              fill="white"stroke="black" stroke-width="0.5" />
+        <!-- Windshield -->
         <path d="M18 46 Q36 38 54 46 L50 60 L22 60 Z"
               fill="black"/>
 
-        <!-- Hood -->
+        <!-- Hard top -->
         <rect x="21" y="60" width="30" height="38" rx="4"
               fill="#555" stroke="#222" stroke-width="1.5"/>
         <rect x="27" y="65" width="3" height="28" fill="#333"/>
@@ -628,6 +663,9 @@
       connected: true,
       status: 'Demo',
       direction: phase.gear,
+      speed_cm_s: phase.gear === 'Park'
+        ? 0
+        : Math.round(12 + 16 * Math.sin(Math.PI * progress)),
       latest: latest
     };
   }
@@ -673,6 +711,16 @@
 
   function render(state) {
     byId('status').textContent = state.status;
+
+    const speed = state.connected &&
+      Number.isFinite(state.speed_cm_s) &&
+      state.speed_cm_s >= 0
+        ? state.speed_cm_s
+        : null;
+
+    byId('speed-value').textContent = speed === null
+      ? '--'
+      : Math.round(speed).toString();
 
     const currentGear =
       state.connected &&
@@ -765,7 +813,7 @@
         ? 'Idling...'
         : currentGear === 'Park'
           ? 'Idling...'
-          : 'Clear';
+          : '';
 
     const distance = currentGear === 'Drive'
       ? latest.front

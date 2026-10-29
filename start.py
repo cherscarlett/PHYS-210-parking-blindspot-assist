@@ -44,6 +44,7 @@ UUID_TO_SENSOR = {
 }
 
 DIRECTION_UUID = sensor_uuid(5)
+SPEED_UUID = sensor_uuid(6)
 DIRECTION_NAMES = {
     0: "Park",
     3: "Drive",
@@ -52,7 +53,7 @@ DIRECTION_NAMES = {
 
 
 def decode_notification(uuid: str, payload: bytes):
-    """Decode the one-byte direction or two-byte distance BLE value."""
+    """Decode the direction, speed (cm/s), or distance BLE value."""
 
     uuid = str(uuid).lower()
 
@@ -60,6 +61,13 @@ def decode_notification(uuid: str, payload: bytes):
         if len(payload) != 1 or payload[0] not in DIRECTION_NAMES:
             return None
         return "direction", payload[0]
+
+    if uuid == SPEED_UUID:
+        if len(payload) != 2:
+            return None
+        return "speed_cm_s", int.from_bytes(
+            payload, byteorder="little", signed=False
+        )
 
     sensor = UUID_TO_SENSOR.get(uuid)
 
@@ -88,6 +96,7 @@ class BluetoothMonitor:
 
         self.latest = {}
         self.direction = None
+        self.speed_cm_s = None
         self.last_at = None
 
         self.packets = 0
@@ -140,6 +149,7 @@ class BluetoothMonitor:
 
             self.latest.clear()
             self.direction = None
+            self.speed_cm_s = None
             self.samples.clear()
 
             self.packets = 0
@@ -200,6 +210,17 @@ class BluetoothMonitor:
                 self.log(f"Motion direction: {name}")
             return
 
+        if key == "speed_cm_s":
+            with self.lock:
+                self.speed_cm_s = value
+                self.last_at = now
+                self.packets += 1
+                self.samples.append({
+                    "time": now,
+                    "speed_cm_s": value
+                })
+            return
+
         distance_cm = value
 
         with self.lock:
@@ -245,6 +266,7 @@ class BluetoothMonitor:
                     DIRECTION_NAMES[self.direction]
                     if self.direction is not None else None
                 ),
+                "speed_cm_s": self.speed_cm_s,
                 "last_at": self.last_at,
 
                 "sensors": [
@@ -271,7 +293,7 @@ class BluetoothMonitor:
 
         fields = ["time"] + [
             key for key, _ in SENSOR_NAMES.values()
-        ] + ["direction"]
+        ] + ["direction", "speed_cm_s"]
 
         writer = csv.DictWriter(
             output,
@@ -323,7 +345,8 @@ class BluetoothMonitor:
                         })
 
                         if (
-                            (uuid in UUID_TO_SENSOR or uuid == DIRECTION_UUID)
+                            (uuid in UUID_TO_SENSOR or
+                             uuid in (DIRECTION_UUID, SPEED_UUID))
                             and (
                                 "notify" in props
                                 or "indicate" in props
@@ -353,13 +376,22 @@ class BluetoothMonitor:
 
                         if char.uuid.lower() == DIRECTION_UUID:
                             label = "Gear"
-                            
+
                             try:
                                 initial = await client.read_gatt_char(char)
                                 self.handle_notification(char.uuid, initial)
                             except Exception as exc:
                                 self.log(
                                     f"Could not read initial gear: {exc}"
+                                )
+                        elif char.uuid.lower() == SPEED_UUID:
+                            label = "Speed"
+                            try:
+                                initial = await client.read_gatt_char(char)
+                                self.handle_notification(char.uuid, initial)
+                            except Exception as exc:
+                                self.log(
+                                    f"Could not read initial speed: {exc}"
                                 )
                         else:
                             label = UUID_TO_SENSOR[
@@ -382,7 +414,7 @@ class BluetoothMonitor:
 
                 if not subscribed:
                     self.log(
-                        "No configured distance or motion "
+                        "No configured distance, motion or speed "
                         "characteristics advertised with Notify"
                     )
 
