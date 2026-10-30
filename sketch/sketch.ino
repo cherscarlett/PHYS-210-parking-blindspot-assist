@@ -4,7 +4,7 @@
 
 int blueLED = 12;
 int redLED = 3;
-int whiteLED = 8;
+int whiteLED = 1;
 
 int buzzer = 9;
 
@@ -26,11 +26,10 @@ int rearTrig = 20;
 int rearEcho = 21;
 
 const int distanceThreshold = 30;
-const int blindSpotThreshold = 10;
-const int dangerThreshold = 7;
+const int blindSpotThreshold = 20;
+const int dangerThreshold = 10;
 
-// Order: front, driver, rear, passenger
-// Read one sensor per interval
+// Order: front, driver, rear, passenger. Read one sensor per interval
 // to reduce ultrasonic cross-talk.
 const unsigned long sensorInterval = 60;
 
@@ -52,28 +51,66 @@ unsigned long lastReading = 0;
 int nextSensor = 0;
 bool alarmActive = false;
 
+// --- Gyro-assisted dead reckoning ---
+// Calibrate while stationary. This remains an estimate, not an odometer.
+// Negative linear X acceleration corresponds to forward movement.
 const int calibrationSamplesNeeded = 100;
-const float standardGravity = 9.80665f;      
-const float accelerationDeadbandG = 0.045f;  
-const float startSpeedMps = 0.04f;            
-const float stopSpeedMps = 0.015f;           
+const float standardGravity = 9.80665f;      // m/s^2 per g
+const float accelerationDeadbandG = 0.020f;  // Tune after examining raw readings
+const float startSpeedMps = 0.04f;            // Start showing Drive/Reverse
+const float stopSpeedMps = 0.015f;           // Return to Park near zero speed
 const unsigned long maxSampleGapUs = 150000UL;
 const unsigned long speedPublishIntervalMs = 200;
+const unsigned long rawAccelerationPublishIntervalMs = 20;
+
+// Complementary filter: gyroscope handles rapid tilt, accelerometer corrects
+// long-term gyro drift. Gravity and linear acceleration are not identical.
+const float gravityCorrectionPerSecond = 0.50f;
+const float orientationEventDps = 15.0f;
+const float stationaryGyroDps = 6.0f;
+const float stationaryRawChangeG = 0.012f;
+const float stationaryLinearAccelerationG = 0.035f;
+const unsigned long stationaryHoldMs = 700;
+const unsigned long recentBrakeWindowMs = 1800;
+const unsigned long recentTiltWindowMs = 2200;
 
 bool imuReady = false;
 bool baselineReady = false;
 int calibrationSamples = 0;
 float calibrationSumX = 0.0f;
-float baselineX = 0.0f;
+float calibrationSumY = 0.0f;
+float calibrationSumZ = 0.0f;
+float gravityX = 0.0f;
+float gravityY = 0.0f;
+float gravityZ = 1.0f;
+float calibratedGravityMagnitude = 1.0f;
+float calibrationGyroSumX = 0.0f;
+float calibrationGyroSumY = 0.0f;
+float calibrationGyroSumZ = 0.0f;
+int calibrationGyroSamples = 0;
+float gyroBiasX = 0.0f;
+float gyroBiasY = 0.0f;
+float gyroBiasZ = 0.0f;
+float latestGyroX = 0.0f;
+float latestGyroY = 0.0f;
+float latestGyroZ = 0.0f;
+float previousRawX = 0.0f;
+float previousRawY = 0.0f;
+float previousRawZ = 0.0f;
+unsigned long stableSinceMs = 0;
+unsigned long lastBrakingMs = 0;
+unsigned long lastTiltMs = 0;
 
+// Positive is forward; negative is backward. Position is relative to Park.
 float estimatedVelocityMps = 0.0f;
 float estimatedPositionM = 0.0f;
 float previousAccelerationMps2 = 0.0f;
 unsigned long lastIMUReadUs = 0;
 unsigned long lastSpeedPublishMs = 0;
 unsigned short lastPublishedSpeedCmS = 0;
+unsigned long lastRawAccelerationPublishMs = 0;
 
-// 0=Park, 3=Drive, 4=Reverse.
+// BLE codes: 0=Park, 3=Drive, 4=Reverse.
 byte motionDirection = 0;
 const char* directionNames[5] = {
   "Park", "", "", "Drive", "Reverse"
@@ -110,9 +147,17 @@ BLEByteCharacteristic motionCharacteristic(
   BLERead | BLENotify
 );
 
+// Speed as an unsigned 16-bit integer in cm/s (magnitude, not signed).
 BLEUnsignedShortCharacteristic speedCharacteristic(
   "19b10006-e8f2-537e-4f6c-d104768a1214",
   BLERead | BLENotify
+);
+
+// Three unfiltered IMU acceleration readings (X, Y, Z), in g.
+// One notification contains three consecutive little-endian 32-bit floats.
+BLECharacteristic rawAccelerationCharacteristic(
+  "19b10007-e8f2-537e-4f6c-d104768a1214",
+  BLERead | BLENotify, 12, true
 );
 
 void publishSpeed(bool force = false) {
@@ -132,7 +177,7 @@ void publishSpeed(bool force = false) {
 void setMotionDirection(byte newDirection) {
   if (newDirection != motionDirection) {
     if (newDirection == 0) {
-      // Always starts at position 0 to maintain +/- fwd/bck translational relationship
+      // Start the next journey at position 0, even if we stopped elsewhere.
       estimatedPositionM = 0.0f;
     }
     motionDirection = newDirection;
@@ -147,9 +192,11 @@ void resetEstimatedVelocity() {
   estimatedPositionM = 0.0f;
   previousAccelerationMps2 = 0.0f;
   lastIMUReadUs = 0;
+  stableSinceMs = 0;
+  lastBrakingMs = 0;
+  lastTiltMs = 0;
   setMotionDirection(0);
   publishSpeed(true);
-  Serial.println("Stopped: velocity and position reset to zero.");
 }
 
 void setup() {
@@ -204,7 +251,7 @@ void setup() {
 
   if (imuReady) {
     Serial.println("Accelerometer initialized");
-    Serial.println("Keep Jeep stationary for IMU calibration...");
+    Serial.println("Keep stationary for IMU calibration...");
   } else {
     Serial.println("Accelerometer failed; distance sensors will continue");
   }
@@ -214,7 +261,7 @@ void setup() {
     while (1);
   }
 
-  BLE.setLocalName("BB JEEP");
+  BLE.setLocalName("BB JEEP"); // demo name - change this
   BLE.setAdvertisedService(ledService);
 
   ledService.addCharacteristic(switchCharacteristic);
@@ -224,6 +271,7 @@ void setup() {
   ledService.addCharacteristic(rearDistanceCharacteristic);
   ledService.addCharacteristic(motionCharacteristic);
   ledService.addCharacteristic(speedCharacteristic);
+  ledService.addCharacteristic(rawAccelerationCharacteristic);
 
   BLE.addService(ledService);
 
@@ -234,6 +282,10 @@ void setup() {
   rearDistanceCharacteristic.writeValue((unsigned short)0);
   motionCharacteristic.writeValue((byte)0);
   speedCharacteristic.writeValue((unsigned short)0);
+  const float zeroAcceleration[3] = {0.0f, 0.0f, 0.0f};
+  rawAccelerationCharacteristic.writeValue(
+    (const uint8_t*)zeroAcceleration, sizeof(zeroAcceleration)
+  );
 
   BLE.advertise();
 
@@ -308,26 +360,6 @@ void updateSensors() {
 
   updateDangerAlarm();
   nextSensor = (nextSensor + 1) % 4;
-
-  if (nextSensor == 0) {
-    Serial.print("Front: ");
-    Serial.print(distances[0]);
-    Serial.print(" cm | Driver: ");
-    Serial.print(distances[1]);
-    Serial.print(" cm | Rear: ");
-    Serial.print(distances[2]);
-    Serial.print(" cm | Passenger: ");
-    Serial.print(distances[3]);
-    Serial.print(" cm | Motion: ");
-    Serial.print(directionNames[motionDirection]);
-    Serial.print(" | Velocity: ");
-    Serial.print(estimatedVelocityMps, 3);
-    Serial.print(" m/s | Speed: ");
-    Serial.print(fabsf(estimatedVelocityMps) * 100.0f, 1);
-    Serial.print(" cm/s | Position: ");
-    Serial.print(estimatedPositionM, 3);
-    Serial.println(" m");
-  }
 }
 
 void updateMotion() {
@@ -340,17 +372,57 @@ void updateMotion() {
     return;
   }
 
+  // Gyroscope readings are in degrees/second
+  bool newGyro = false;
+  if (IMU.gyroscopeAvailable()) {
+    newGyro = IMU.readGyroscope(
+      latestGyroX, latestGyroY, latestGyroZ
+    );
+  }
+
+  // Send direct IMU readings to the Python BLE server, including during
+  // startup calibration. Do not apply a baseline or deadband to these values.
+  unsigned long nowMs = millis();
+  if (nowMs - lastRawAccelerationPublishMs >= rawAccelerationPublishIntervalMs) {
+    lastRawAccelerationPublishMs = nowMs;
+    const float rawAcceleration[3] = {x, y, z};
+    rawAccelerationCharacteristic.writeValue(
+      (const uint8_t*)rawAcceleration, sizeof(rawAcceleration)
+    );
+  }
+
   unsigned long nowUs = micros();
 
   if (!baselineReady) {
     calibrationSumX += x;
+    calibrationSumY += y;
+    calibrationSumZ += z;
+    if (newGyro) {
+      calibrationGyroSumX += latestGyroX;
+      calibrationGyroSumY += latestGyroY;
+      calibrationGyroSumZ += latestGyroZ;
+      calibrationGyroSamples++;
+    }
     calibrationSamples++;
 
     if (calibrationSamples >= calibrationSamplesNeeded) {
-      baselineX = calibrationSumX / calibrationSamples;
+      gravityX = calibrationSumX / calibrationSamples;
+      gravityY = calibrationSumY / calibrationSamples;
+      gravityZ = calibrationSumZ / calibrationSamples;
+      calibratedGravityMagnitude = sqrtf(
+        gravityX * gravityX + gravityY * gravityY + gravityZ * gravityZ
+      );
+      if (calibrationGyroSamples > 0) {
+        gyroBiasX = calibrationGyroSumX / calibrationGyroSamples;
+        gyroBiasY = calibrationGyroSumY / calibrationGyroSamples;
+        gyroBiasZ = calibrationGyroSumZ / calibrationGyroSamples;
+      }
+      previousRawX = x;
+      previousRawY = y;
+      previousRawZ = z;
       baselineReady = true;
       lastIMUReadUs = nowUs;
-      Serial.println("IMU calibration complete; ready for motion.");
+      Serial.println("IMU gravity/gyro calibration complete.");
     }
     return;
   }
@@ -363,7 +435,7 @@ void updateMotion() {
   unsigned long elapsedUs = nowUs - lastIMUReadUs;
   lastIMUReadUs = nowUs;
 
-  // Discards long gaps to avoid integrating stale acceleration.
+  // Discard unusually long gaps instead of integrating stale acceleration.
   if (elapsedUs == 0 || elapsedUs > maxSampleGapUs) {
     previousAccelerationMps2 = 0.0f;
     return;
@@ -371,8 +443,44 @@ void updateMotion() {
 
   float dt = elapsedUs * 0.000001f;
 
-  // Positive acceleration = forward.
-  float forwardAccelerationG = -(x - baselineX);
+  float gxDps = latestGyroX - gyroBiasX;
+  float gyDps = latestGyroY - gyroBiasY;
+  float gzDps = latestGyroZ - gyroBiasZ;
+  const float radiansPerDegree = 0.01745329252f;
+  float wx = gxDps * radiansPerDegree;
+  float wy = gyDps * radiansPerDegree;
+  float wz = gzDps * radiansPerDegree;
+
+  // Gyro-predicted gravity vector in the sensor's coordinate frame:
+  // dg/dt = -omega x g. Use the old vector for all three components.
+  float oldGravityX = gravityX;
+  float oldGravityY = gravityY;
+  float oldGravityZ = gravityZ;
+  gravityX += (wz * oldGravityY - wy * oldGravityZ) * dt;
+  gravityY += (wx * oldGravityZ - wz * oldGravityX) * dt;
+  gravityZ += (wy * oldGravityX - wx * oldGravityY) * dt;
+
+  float rawMagnitude = sqrtf(x * x + y * y + z * z);
+  // Slowly correct gyro drift when the measured vector looks gravity-like.
+  if (fabsf(rawMagnitude - calibratedGravityMagnitude) < 0.06f) {
+    float correction = gravityCorrectionPerSecond * dt;
+    gravityX += correction * (x - gravityX);
+    gravityY += correction * (y - gravityY);
+    gravityZ += correction * (z - gravityZ);
+  }
+
+  // Keep the gravity estimate at the magnitude measured during calibration.
+  float gravityMagnitude = sqrtf(
+    gravityX * gravityX + gravityY * gravityY + gravityZ * gravityZ
+  );
+  if (gravityMagnitude > 0.1f) {
+    float scale = calibratedGravityMagnitude / gravityMagnitude;
+    gravityX *= scale;
+    gravityY *= scale;
+    gravityZ *= scale;
+  }
+
+  float forwardAccelerationG = x - gravityX;
 
   if (fabsf(forwardAccelerationG) < accelerationDeadbandG) {
     forwardAccelerationG = 0.0f;
@@ -381,17 +489,85 @@ void updateMotion() {
   float accelerationMps2 = forwardAccelerationG * standardGravity;
   float oldVelocity = estimatedVelocityMps;
 
-  // Integrates acceleration to velocity.
-  estimatedVelocityMps +=
+  // Detect signed braking and zero crossings before taking the absolute value
+  // for the dashboard. A single step can pass across the stop-speed window.
+  float newVelocity = oldVelocity +
     0.5f * (previousAccelerationMps2 + accelerationMps2) * dt;
 
-  // Integrates velocity to position
-  estimatedPositionM +=
-    0.5f * (oldVelocity + estimatedVelocityMps) * dt;
+  bool crossedZero =
+    (motionDirection == 3 && oldVelocity > 0.0f && newVelocity <= 0.0f) ||
+    (motionDirection == 4 && oldVelocity < 0.0f && newVelocity >= 0.0f);
+  if (crossedZero) {
+    resetEstimatedVelocity();  // Also resets position and reverse lights.
+    return;
+  }
+
+  estimatedVelocityMps = newVelocity;
+
+  // Do not accumulate a nonzero position while the dashboard says Park.
+  if (motionDirection != 0) {
+    estimatedPositionM +=
+      0.5f * (oldVelocity + estimatedVelocityMps) * dt;
+  }
 
   previousAccelerationMps2 = accelerationMps2;
 
-  // Direction from estimated velocity
+  bool braking =
+    (oldVelocity > startSpeedMps && accelerationMps2 < -0.20f) ||
+    (oldVelocity < -startSpeedMps && accelerationMps2 > 0.20f);
+  if (braking) lastBrakingMs = nowMs;
+
+  // A large pitch/roll movement indicates the Jeep may have been picked up
+  // or placed at a new angle. Do not use yaw, which changes during steering.
+  if (fabsf(gxDps) > orientationEventDps ||
+      fabsf(gyDps) > orientationEventDps) {
+    lastTiltMs = nowMs;
+  }
+
+  // Best-effort Park heuristic: require a recent brake or tilt event, then a
+  // stable acceleration vector and nearly zero angular velocity. Constant
+  // velocity can still look stationary: this is not a guaranteed detector.
+  bool rawStable =
+    fabsf(x - previousRawX) < stationaryRawChangeG &&
+    fabsf(y - previousRawY) < stationaryRawChangeG &&
+    fabsf(z - previousRawZ) < stationaryRawChangeG;
+  bool gyroStable =
+    fabsf(gxDps) < stationaryGyroDps &&
+    fabsf(gyDps) < stationaryGyroDps &&
+    fabsf(gzDps) < stationaryGyroDps;
+  previousRawX = x;
+  previousRawY = y;
+  previousRawZ = z;
+
+  if (rawStable && gyroStable) {
+    if (stableSinceMs == 0) stableSinceMs = nowMs;
+  } else {
+    stableSinceMs = 0;
+  }
+
+  bool recentBraking =
+    lastBrakingMs != 0 && nowMs - lastBrakingMs <= recentBrakeWindowMs;
+  bool recentTilt =
+    lastTiltMs != 0 && nowMs - lastTiltMs <= recentTiltWindowMs;
+  // After a tilt event we can re-zero at rest even while the gravity filter
+  // is still converging. After braking, require small corrected acceleration.
+  bool settledEnough = recentTilt ||
+    fabsf(forwardAccelerationG) <= stationaryLinearAccelerationG;
+  if (motionDirection != 0 && stableSinceMs != 0 &&
+      nowMs - stableSinceMs >= stationaryHoldMs &&
+      settledEnough &&
+      (recentBraking || recentTilt)) {
+    // Recalibrate the gravity reference only after the Jeep appears settled.
+    gravityX = x;
+    gravityY = y;
+    gravityZ = z;
+    calibratedGravityMagnitude = rawMagnitude;
+    resetEstimatedVelocity();
+    return;
+  }
+
+  // Direction comes from estimated velocity, NOT instantaneous acceleration.
+  // Hysteresis reduces flicker around 0 m/s.
   byte detectedDirection = motionDirection;
 
   if (motionDirection == 0) {
@@ -401,9 +577,8 @@ void updateMotion() {
       detectedDirection = 4;  // Reverse
     }
   } else if (fabsf(estimatedVelocityMps) <= stopSpeedMps) {
-    detectedDirection = 0;  // Park
-    estimatedVelocityMps = 0.0f;
-    previousAccelerationMps2 = 0.0f;
+    resetEstimatedVelocity();  // Park and reset all related estimator state.
+    return;
   } else if (motionDirection == 3 &&
              estimatedVelocityMps <= -startSpeedMps) {
     detectedDirection = 4;
