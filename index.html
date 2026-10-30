@@ -540,7 +540,6 @@
     Reverse: 2
   };
 
-  // Times in milliseconds
   const demoPhases = [
     { gear: 'Drive', duration: 5000 },
     { gear: 'Reverse', duration: 5000 },
@@ -741,7 +740,6 @@
 
     const latest = state.latest || {};
 
-    // Front and rear zones use their own sensor distances.
     updateParkingZone('front-fill', latest.front, state.connected);
     updateParkingZone('rear-fill', latest.rear, state.connected);
 
