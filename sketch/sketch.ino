@@ -51,20 +51,15 @@ unsigned long lastReading = 0;
 int nextSensor = 0;
 bool alarmActive = false;
 
-// --- Gyro-assisted dead reckoning ---
-// Calibrate while stationary. This remains an estimate, not an odometer.
-// Negative linear X acceleration corresponds to forward movement.
 const int calibrationSamplesNeeded = 100;
 const float standardGravity = 9.80665f;      // m/s^2 per g
-const float accelerationDeadbandG = 0.020f;  // Tune after examining raw readings
-const float startSpeedMps = 0.04f;            // Start showing Drive/Reverse
-const float stopSpeedMps = 0.015f;           // Return to Park near zero speed
+const float accelerationDeadbandG = 0.020f;  
+const float startSpeedMps = 0.04f;            
+const float stopSpeedMps = 0.015f;          
 const unsigned long maxSampleGapUs = 150000UL;
 const unsigned long speedPublishIntervalMs = 200;
 const unsigned long rawAccelerationPublishIntervalMs = 20;
 
-// Complementary filter: gyroscope handles rapid tilt, accelerometer corrects
-// long-term gyro drift. Gravity and linear acceleration are not identical.
 const float gravityCorrectionPerSecond = 0.50f;
 const float orientationEventDps = 15.0f;
 const float stationaryGyroDps = 6.0f;
@@ -147,14 +142,11 @@ BLEByteCharacteristic motionCharacteristic(
   BLERead | BLENotify
 );
 
-// Speed as an unsigned 16-bit integer in cm/s (magnitude, not signed).
 BLEUnsignedShortCharacteristic speedCharacteristic(
   "19b10006-e8f2-537e-4f6c-d104768a1214",
   BLERead | BLENotify
 );
 
-// Three unfiltered IMU acceleration readings (X, Y, Z), in g.
-// One notification contains three consecutive little-endian 32-bit floats.
 BLECharacteristic rawAccelerationCharacteristic(
   "19b10007-e8f2-537e-4f6c-d104768a1214",
   BLERead | BLENotify, 12, true
@@ -177,7 +169,6 @@ void publishSpeed(bool force = false) {
 void setMotionDirection(byte newDirection) {
   if (newDirection != motionDirection) {
     if (newDirection == 0) {
-      // Start the next journey at position 0, even if we stopped elsewhere.
       estimatedPositionM = 0.0f;
     }
     motionDirection = newDirection;
@@ -380,8 +371,6 @@ void updateMotion() {
     );
   }
 
-  // Send direct IMU readings to the Python BLE server, including during
-  // startup calibration. Do not apply a baseline or deadband to these values.
   unsigned long nowMs = millis();
   if (nowMs - lastRawAccelerationPublishMs >= rawAccelerationPublishIntervalMs) {
     lastRawAccelerationPublishMs = nowMs;
@@ -435,7 +424,7 @@ void updateMotion() {
   unsigned long elapsedUs = nowUs - lastIMUReadUs;
   lastIMUReadUs = nowUs;
 
-  // Discard unusually long gaps instead of integrating stale acceleration.
+  // Don't integrate stale acceleration
   if (elapsedUs == 0 || elapsedUs > maxSampleGapUs) {
     previousAccelerationMps2 = 0.0f;
     return;
@@ -461,7 +450,7 @@ void updateMotion() {
   gravityZ += (wy * oldGravityX - wx * oldGravityY) * dt;
 
   float rawMagnitude = sqrtf(x * x + y * y + z * z);
-  // Slowly correct gyro drift when the measured vector looks gravity-like.
+  //  correct gyro drift
   if (fabsf(rawMagnitude - calibratedGravityMagnitude) < 0.06f) {
     float correction = gravityCorrectionPerSecond * dt;
     gravityX += correction * (x - gravityX);
@@ -469,7 +458,6 @@ void updateMotion() {
     gravityZ += correction * (z - gravityZ);
   }
 
-  // Keep the gravity estimate at the magnitude measured during calibration.
   float gravityMagnitude = sqrtf(
     gravityX * gravityX + gravityY * gravityY + gravityZ * gravityZ
   );
@@ -489,8 +477,6 @@ void updateMotion() {
   float accelerationMps2 = forwardAccelerationG * standardGravity;
   float oldVelocity = estimatedVelocityMps;
 
-  // Detect signed braking and zero crossings before taking the absolute value
-  // for the dashboard. A single step can pass across the stop-speed window.
   float newVelocity = oldVelocity +
     0.5f * (previousAccelerationMps2 + accelerationMps2) * dt;
 
@@ -498,7 +484,7 @@ void updateMotion() {
     (motionDirection == 3 && oldVelocity > 0.0f && newVelocity <= 0.0f) ||
     (motionDirection == 4 && oldVelocity < 0.0f && newVelocity >= 0.0f);
   if (crossedZero) {
-    resetEstimatedVelocity();  // Also resets position and reverse lights.
+    resetEstimatedVelocity(); 
     return;
   }
 
@@ -524,9 +510,6 @@ void updateMotion() {
     lastTiltMs = nowMs;
   }
 
-  // Best-effort Park heuristic: require a recent brake or tilt event, then a
-  // stable acceleration vector and nearly zero angular velocity. Constant
-  // velocity can still look stationary: this is not a guaranteed detector.
   bool rawStable =
     fabsf(x - previousRawX) < stationaryRawChangeG &&
     fabsf(y - previousRawY) < stationaryRawChangeG &&
@@ -557,8 +540,7 @@ void updateMotion() {
       nowMs - stableSinceMs >= stationaryHoldMs &&
       settledEnough &&
       (recentBraking || recentTilt)) {
-    // Recalibrate the gravity reference only after the Jeep appears settled.
-    gravityX = x;
+    // Recalibrate the gravity reference
     gravityY = y;
     gravityZ = z;
     calibratedGravityMagnitude = rawMagnitude;
@@ -566,8 +548,6 @@ void updateMotion() {
     return;
   }
 
-  // Direction comes from estimated velocity, NOT instantaneous acceleration.
-  // Hysteresis reduces flicker around 0 m/s.
   byte detectedDirection = motionDirection;
 
   if (motionDirection == 0) {
